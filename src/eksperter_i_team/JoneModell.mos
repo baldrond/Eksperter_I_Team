@@ -1,0 +1,170 @@
+model test
+
+uses "mmxprs"; !gain access to the Xpress-Optimizer solver
+uses "advmod";
+	
+parameters
+	DataFile1 = 'src\\eksperter_i_team\\activities.txt';
+	DataFile2 = 'src\\eksperter_i_team\\DataTime.txt';
+	DataFile3 = 'src\\eksperter_i_team\\rooms.txt';
+	
+	Presolve = true;
+	Heuristic = true;
+	Cutting = true;
+end-parameters
+
+! What we call courses throughout this file are actually activities, such that two activities might belong
+! to the same course. In this case they obviously cannot collide, which will be reflected in the matrix INCOMP.
+declarations
+	nCourses: 		integer;
+	CourseName:		set of string;
+	nDays:			integer;
+	nTimeslots:		integer;
+	nRooms:			integer;
+	RoomName:		set of string;
+end-declarations
+
+initializations from DataFile1
+	nCourses;
+	CourseName;
+end-initializations
+
+declarations
+	CourseHours:	array(CourseName) of integer;
+	CourseNoStudents: array(CourseName) of integer;
+end-declarations
+
+initializations from DataFile1
+	CourseHours;
+	CourseNoStudents;
+end-initializations
+
+initializations from DataFile2
+	nDays;
+	nTimeslots;
+end-initializations
+
+Days := 1 .. nDays;
+Timeslots := 1 .. nTimeslots;
+
+initializations from DataFile3
+	nRooms;
+	RoomName;
+end-initializations
+
+declarations
+	RoomCap: array(RoomName) of integer;
+end-declarations
+
+initializations from DataFile3
+	RoomCap;
+end-initializations
+
+
+writeln;
+write('In this problem there are:');
+writeln;
+write(nCourses,' courses');
+writeln;
+write(nDays, ' days and ', nTimeslots, ' timeslots each day');
+writeln;
+write(nRooms, ' rooms');
+writeln;
+
+declarations
+	INCOMP: 		array(CourseName, CourseName) of real;
+	plan: 			dynamic array(CourseName, Days, Timeslots, RoomName) of mpvar;
+	collisions:		array(CourseName, CourseName) of mpvar;
+	starter:		dynamic array(CourseName, Days, Timeslots, RoomName) of mpvar;
+	kollisjon:		dynamic array(CourseName, CourseName) of mpvar;
+end-declarations
+
+forall (c in CourseName, d in Days, t in Timeslots, r in RoomName) do
+	if (t<=nTimeslots-CourseHours(c)+1) then
+		if (CourseNoStudents(c)<=RoomCap(r)) then
+			create(starter(c,d,t,r));
+			starter(c,d,t,r) is_binary;
+		end-if
+	end-if
+end-do
+
+
+forall (c in CourseName, d in Days, t in Timeslots, r in RoomName) do
+	if (CourseNoStudents(c)<=RoomCap(r)) then
+			create(plan(c,d,t,r));
+	end-if
+end-do
+
+
+forall (b in CourseName, c in CourseName|b<c) do
+	create(kollisjon(b,c));
+end-do
+
+
+initializations from DataFile1
+	INCOMP;
+end-initializations
+
+! Schedule all courses to CourseHours(c) timeslots
+forall(c in CourseName) do
+	sum(d in Days, t in Timeslots, r in RoomName) starter(c,d,t,r) = 1;	
+end-do
+
+! All hours of activity c in one day and in one room
+forall(d in Days, r in RoomName) do
+	sum(t in Timeslots, c in CourseName)starter(c,d,t,r)*CourseHours(c) <= nTimeslots;
+end-do
+
+forall(t in Timeslots, d in Days, r in RoomName) do
+	sum(c in CourseName)plan(c, d, t, r)<=1;
+end-do
+
+
+!forall(c in CourseName, d in Days, r in RoomName,t in Timeslots) do
+!	starter(c,d,t,r)*CourseHours(c) <= sum(tt in t..t+CourseHours(c)-1)plan(c, d, tt, r);
+!end-do
+
+forall(c in CourseName, d in Days, r in RoomName,t in Timeslots, tt in t..t+CourseHours(c)-1) do
+	starter(c,d,t,r) <= plan(c, d, tt, r);
+end-do
+
+
+! Respect incompatibilities. If activities b and c they must collide
+forall(b,c in CourseName, d in Days, t in Timeslots | b < c and INCOMP(b,c) = 1) do
+	sum(r in RoomName)plan(c, d, t, r) + sum(s in RoomName)plan(b, d, t, s) <= 1 + kollisjon(b,c);
+end-do
+
+
+
+
+
+
+
+
+totalCollisions:= sum(b, c in CourseName | b < c and INCOMP(b,c) = 1) kollisjon(b,c);
+
+! Weighing collisions by the product of number of students in activity b and c
+totalWeightedCollisions:= sum(b, c in CourseName | b < c and INCOMP(b,c) = 1) CourseNoStudents(b)*CourseNoStudents(c)*kollisjon(b,c);
+
+! Solve problem
+minimize(totalWeightedCollisions);
+
+! Output
+writeln;
+forall (c in CourseName, d in Days, t in Timeslots, r in RoomName | getsol(plan(c, d, t, r)) = 1) do
+	write(c, ' has ', CourseNoStudents(c), ' students and is scheduled at day ', d, ', timeslot ', t, ' and room ', r, ' with capacity ', RoomCap(r));
+	writeln;
+end-do
+
+write('The number of total collisions is: ', getsol(totalCollisions));
+writeln;
+write('The sum of weighted collisions is: ', getsol(totalWeightedCollisions));
+writeln;
+forall(b,c in CourseName | b < c and getsol(kollisjon(b,c)) = 1) do
+	write('Activity ', b, ' crashes with activity ', c);
+	writeln;
+end-do	 
+
+end-model;
+
+
